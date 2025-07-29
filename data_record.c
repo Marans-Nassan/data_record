@@ -45,8 +45,8 @@ static bool logger_enabled;
 static const uint32_t period = 1000;
 static absolute_time_t next_log_time;
 int16_t acceleration[3], gyro[3], temp;
-
 static char filename[20];
+bool sd_montado = false;
 
 void display(void);
 void init_led(void);
@@ -55,7 +55,8 @@ void i2c_sensor(void);
 void i2c_display(void);
 void oled_config(void);
 void pwm_setup(void);
-void pwm_level(uint8_t dc);
+void pwm_beep(uint gpio, float duty, uint8_t times, float sec, bool ramp, bool use_end, bool end_high);
+void pwm_off(uint gpio);
 void gpio_irq_handler(uint gpio, uint32_t events);
 static sd_card_t *sd_get_by_name(const char *const name);
 static FATFS *sd_get_fs_by_name(const char *name);
@@ -123,6 +124,7 @@ int main(){
             gpio_put(green_led, 1);
             gpio_put(blue_led, 0);
             gpio_put(red_led, 1);
+            pwm_beep(buzz_a, 0.5f, 1, 0.5f, false, false, false);
             run_mount();
             sleep_ms(100);
             gpio_put(green_led, 1);
@@ -132,10 +134,11 @@ int main(){
         }
         if (cRxedChar == 'b'){ // Desmonta o SD card se pressionar 'b'
             printf("\nDesmontando o SD. Aguarde...\n");
-            run_unmount();
             gpio_put(green_led, 0);
             gpio_put(blue_led, 0);
             gpio_put(red_led, 0);
+            pwm_beep(buzz_a, 0.5f, 2, 0.5f, false, false, false);
+            run_unmount();
             printf("\nEscolha o comando (h = help):  ");
         }
         if (cRxedChar == 'c'){ // Lista diretórios e os arquivos se pressionar 'c'
@@ -143,6 +146,7 @@ int main(){
             gpio_put(green_led, 1);
             gpio_put(blue_led, 0);
             gpio_put(red_led, 0);
+            pwm_beep(buzz_a, 0.5f, 1, 0.2f, false, false, false);
             run_ls();
             printf("\nListagem concluída.\n");
             printf("\nEscolha o comando (h = help):  ");
@@ -151,6 +155,7 @@ int main(){
             gpio_put(green_led, 1);
             gpio_put(blue_led, 0);
             gpio_put(red_led, 0);
+            pwm_beep(buzz_a, 0.5f, 2, 0.2f, false, false, false);
             read_file(filename);
             printf("Escolha o comando (h = help):  ");
         }
@@ -158,15 +163,17 @@ int main(){
             printf("\nObtendo espaço livre no SD.\n\n");
             gpio_put(green_led, 1);
             gpio_put(blue_led, 0);
-            gpio_put(red_led, 0);    
+            gpio_put(red_led, 0);   
+            pwm_beep(buzz_a, 0.5f, 1, 0.7f, false, false, false); 
             run_getfree();
             printf("\nEspaço livre obtido.\n");
             printf("\nEscolha o comando (h = help):  ");
         }
-        if (cRxedChar == 'f'){ // Captura dados do ADC e salva no arquivo se pressionar 'f'
+        if (cRxedChar == 'f'){ // Captura dados e salva no arquivo se pressionar 'f'
             gpio_put(green_led, 0);
             gpio_put(blue_led, 0);
             gpio_put(red_led, 1);
+            pwm_beep(buzz_a, 0.5f, 1, 1.2f, false, false, false);
             generate_unique_filename();
             capture_data_and_save();
             printf("\nEscolha o comando (h = help):  ");
@@ -176,20 +183,16 @@ int main(){
             gpio_put(green_led, 1);
             gpio_put(blue_led, 1);
             gpio_put(red_led, 1);
+            pwm_beep(buzz_a, 0.8f, 3, 1.0f, false, false, false);
             run_format();
             printf("\nFormatação concluída.\n\n");
             printf("\nEscolha o comando (h = help):  ");
         }
-        if (cRxedChar == 'h'){ // Exibe os comandos disponíveis se pressionar 'h'
-        
-            run_help();
-        }
-
+        if (cRxedChar == 'h') run_help(); // Exibe os comandos disponíveis se pressionar 'h'
         sleep_ms(500);
     }
     return 0;
 }
-
 
 void display(void){
     bool cor = true;
@@ -257,19 +260,89 @@ void pwm_setup(void){
     pwm_set_wrap(slice, 7812.5f);
     pwm_set_enabled(slice, true);
 }
+void pwm_beep(uint gpio, float duty, uint8_t times, float sec, bool ramp, bool use_end, bool end_high) {
+    uint slice = pwm_gpio_to_slice_num(gpio);
+    uint wrap  = pwm_get_wrap(slice);
+    const int steps = 100;
+    float total_ms = sec * 1000.0f;
+    float phase_ms = ramp ? (total_ms / 2.0f) : total_ms;
+    float delay_ms = phase_ms / steps;
 
-void pwm_level(uint8_t dc){
-    pwm_set_gpio_level(buzz_a, (7812.5f * dc) / 100);
+    if (times == 0 && !ramp) {
+        pwm_set_chan_level(slice, PWM_CHAN_A, duty * wrap);
+        return;
+    }
+
+    for (int t = 0; t < (times>0?times:1); t++) {
+        if (ramp) {
+            // up
+            for (int i = 0; i <= steps; i++) {
+                pwm_set_chan_level(slice, PWM_CHAN_A, duty * i/steps * wrap);
+                sleep_ms((uint)delay_ms);
+            }
+            // down
+            for (int i = steps; i >= 0; i--) {
+                pwm_set_chan_level(slice, PWM_CHAN_A, duty * i/steps * wrap);
+                sleep_ms((uint)delay_ms);
+            }
+            if (use_end) {
+                if (end_high) {
+                    // sobe de novo e termina no pico
+                    for (int i = 0; i <= steps; i++) {
+                        pwm_set_chan_level(slice, PWM_CHAN_A, duty * i/steps * wrap);
+                        sleep_ms((uint)delay_ms);
+                    }
+                    break;
+                } else {
+                    break; // termina em baixo (já está em zero)
+                }
+            }
+        } else {
+            pwm_set_chan_level(slice, PWM_CHAN_A, duty * wrap);
+            sleep_ms((uint)total_ms);
+            pwm_set_chan_level(slice, PWM_CHAN_A, 0);
+        }
+        sleep_ms(100);
+    }
+    // se não usar modo de término com alto, garante nível baixo
+    if (!(ramp && use_end && end_high))
+        pwm_set_chan_level(slice, PWM_CHAN_A, 0);
+}
+
+void pwm_off(uint gpio){
+    pwm_set_chan_level(pwm_gpio_to_slice_num(gpio), PWM_CHAN_A, 0);
 }
 
 void gpio_irq_handler(uint gpio, uint32_t events){
     uint64_t current_time = to_ms_since_boot(get_absolute_time());
     static uint64_t last_time_a = 0 , last_time_b = 0;
     if(gpio == bot_a && (current_time - last_time_a > 300)){
-        
+
         last_time_a = current_time;
     } else if(gpio == bot_b &&(current_time - last_time_b > 300)){
-
+        if(!sd_montado){
+            printf("\nMontando o SD...\n");
+            gpio_put(green_led, 1);
+            gpio_put(blue_led, 0);
+            gpio_put(red_led, 1);
+            pwm_beep(buzz_a, 0.5f, 1, 0.5f, false, false, false);
+            run_mount();
+            sleep_ms(100);
+            gpio_put(green_led, 1);
+            gpio_put(blue_led, 0);
+            gpio_put(red_led, 0);
+            printf("\nEscolha o comando (h = help):  ");
+            sd_montado = true;
+        } else {
+            printf("\nDesmontando o SD. Aguarde...\n");
+            gpio_put(green_led, 0);
+            gpio_put(blue_led, 0);
+            gpio_put(red_led, 0);
+            pwm_beep(buzz_a, 0.5f, 2, 0.5f, false, false, false);
+            run_unmount();
+            printf("\nEscolha o comando (h = help):  ");
+            sd_montado = false;
+        }
         last_time_b = current_time;
     }
 }
@@ -481,7 +554,7 @@ static void run_cat(void){
         printf("f_open error: %s (%d)\n", FRESULT_str(fr), fr);
 }
 
-// Função para capturar dados do ADC e salvar no arquivo *.txt
+// Função para capturar dados e salvar no arquivo *.csv
 void generate_unique_filename(void) {
     int index = 0;
     FIL file;
@@ -519,7 +592,7 @@ void capture_data_and_save(void){
 
         float temperature = (temp / 340.0f) + 36.53f;
 
-        int len = sprintf(buffer, "%d,%d,%d,%d,%d,%d,%d,%.2f\n",
+        int len = sprintf(buffer, "%d,%d,%d,%d,%d,%d,%d,%.1f\n",
                           i + 1,
                           acceleration[0], acceleration[1], acceleration[2],
                           gyro[0], gyro[1], gyro[2],
@@ -566,7 +639,7 @@ static void run_help(void){
     printf("Digite 'c' para listar arquivos\n");
     printf("Digite 'd' para mostrar conteúdo do arquivo\n");
     printf("Digite 'e' para obter espaço livre no cartão SD\n");
-    printf("Digite 'f' para capturar dados do ADC e salvar no arquivo\n");
+    printf("Digite 'f' para capturar dados e salvar no arquivo\n");
     printf("Digite 'g' para formatar o cartão SD\n");
     printf("Digite 'h' para exibir os comandos disponíveis\n");
     printf("\nEscolha o comando:  ");
