@@ -21,74 +21,106 @@
 #include "rtc.h"
 #include "sd_card.h"
 
+// Definições de portas I2C e pinos para sensor e display
 #define i2c_port i2c0
 #define i2c_port_display i2c1
-#define i2c_sda 0
-#define i2c_scl 1
-#define bot_a 5
-#define bot_b 6
-#define green_led 11
-#define blue_led 12
-#define red_led 13
-#define i2c_sda_display 14
-#define i2c_scl_display 15
-#define endereco_display 0x3c
-#define buzz_a 21
-#define DISP_W 128
-#define DISP_H 64 
+#define i2c_sda 0          // Pino SDA para I2C do sensor
+#define i2c_scl 1          // Pino SCL para I2C do sensor
+#define i2c_sda_display 14 // Pino SDA para I2C do display
+#define i2c_scl_display 15 // Pino SCL para I2C do display
+#define endereco_display 0x3c // Endereço I2C do OLED
 
+// Definições de pinos GPIO
+#define bot_a 5          // Pino do botão A
+#define bot_b 6          // Pino do botão B
+#define green_led 11     // Pino do LED verde
+#define blue_led 12      // Pino do LED azul
+#define red_led 13       // Pino do LED vermelho
+#define buzz_a 21        // Pino do buzzer
+
+// Dimensões do display
+#define DISP_W 128       // Largura do OLED
+#define DISP_H 64        // Altura do OLED
+
+// Habilita interrupções GPIO para os pinos informados
 #define interrupcoes(botoes) gpio_set_irq_enabled_with_callback(botoes, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
-static int addr = 0x68;
+// Endereço I2C do MPU6050
+static int addr = 0x68; // Endereço do barramento I2C do MPU6050
+
+// Estrutura de controle do display SSD1306
 ssd1306_t ssd;
-static bool logger_enabled;
-static const uint32_t period = 1000;
-static absolute_time_t next_log_time;
-int16_t acceleration[3], gyro[3], temp;
-static char filename[20];
-volatile bool sd_montado = false;
-volatile bool stop_capture = false;
-volatile bool adentrando_a = false;
-volatile bool adentrando_b = false;
-volatile bool capture_running = false;
-bool alteracao = false;
-uint8_t slice = 0;
-char display_s[120];
-char display_padrao[] = {"1.Montar SD    "
+
+// Flags e temporização para registro de dados
+static bool logger_enabled;           // Habilita/desabilita logging
+static const uint32_t period = 1000; // Período de registro em milissegundos
+static absolute_time_t next_log_time; // Próximo tempo agendado para registro
+
+// Buffers de dados brutos do IMU
+int16_t acceleration[3], gyro[3], temp; // Leituras de aceleração, giroscópio e temperatura
+
+// Buffer para nome de arquivo de log
+static char filename[20]; // Armazena nome único para arquivo CSV
+
+// Flags para controle do cartão SD e captura
+volatile bool sd_montado = false;     // Flag de cartão SD montado
+volatile bool stop_capture = false;   // Requisição para parar captura
+volatile bool adentrando_a = false;   // Estado de pressão do botão A
+volatile bool adentrando_b = false;   // Estado de pressão do botão B
+volatile bool capture_running = false; // Flag de captura em andamento
+bool alteracao = false;                // Flag de atualização do display
+
+// Slice PWM para buzzer
+uint8_t slice = 0; // Número do slice PWM para o buzzer
+
+// Buffers de texto para display
+char display_s[120]; // Texto atual a ser exibido no OLED
+char display_padrao[] = {
+    "1.Montar SD    "
     "2.Desmontar SD "
     "3.Listar Dir   "
     "4.Ultimo arquiv"
     "5.Esp.Livre    "
-    "6.Capturar data" 
-    "7.Formatar SD  "};
+    "6.Capturar data"
+    "7.Formatar SD  "
+}; // Strings do menu padrão concatenadas
 
-void display(void);
-void init_led(void);
-void init_bot(void);
-void bot_a_irq(void);
-void bot_b_irq(void);
-void i2c_sensor(void);
-void i2c_display(void);
-void oled_config(void);
-void pwm_setup(void);
-void pwm_beep(uint gpio, float duty, uint8_t times, float sec, bool ramp, bool use_end, bool end_high);
-void gpio_irq_handler(uint gpio, uint32_t events);
-static sd_card_t *sd_get_by_name(const char *const name);
-static FATFS *sd_get_fs_by_name(const char *name);
-static void run_setrtc(void);
-static void run_format(void);
-static void run_mount(void);
-static void run_unmount(void);
-static void run_getfree(void);
-static void run_ls(void);
-static void run_cat(void);
-void generate_unique_filename(void);
-void capture_data_and_save(void);
-void read_file(const char *filename);
-static void run_help(void);
-static void process_stdio(int cRxedChar);
-static void mpu6050_reset(void);
-static void mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp);
+// Protótipos de funções com explicação de propósito
+void display(void); // Core1: atualiza continuamente o display OLED conforme flag 'alteracao'
+void init_led(void); // Inicializa os GPIOs dos LEDs
+void init_bot(void); // Inicializa os GPIOs dos botões com pull-ups
+void bot_a_irq(void); // Trata ações do botão A fora da ISR
+void bot_b_irq(void); // Trata ações do botão B fora da ISR
+void i2c_sensor(void); // Configura I2C para sensor MPU6050
+void i2c_display(void); // Configura I2C para display SSD1306
+void oled_config(void); // Inicializa e limpa o display SSD1306
+void pwm_setup(void); // Configura PWM para buzzer
+void pwm_beep(uint gpio, float duty, uint8_t times, float sec, bool ramp, bool use_end, bool end_high); // Gera sequência de bipes no buzzer
+void gpio_irq_handler(uint gpio, uint32_t events); // Callback de IRQ GPIO para botões
+
+// Funções utilitárias do SD
+static sd_card_t *sd_get_by_name(const char *const name); // Retorna struct do SD pelo nome
+static FATFS *sd_get_fs_by_name(const char *name); // Retorna objeto FATFS pelo nome de drive
+
+// Handlers de comandos
+static void run_setrtc(void);  // Ajusta RTC via entrada serial
+static void run_format(void);  // Formata cartão SD
+static void run_mount(void);   // Monta cartão SD
+static void run_unmount(void); // Desmonta cartão SD
+static void run_getfree(void); // Verifica espaço livre no SD
+static void run_ls(void);      // Lista diretório
+static void run_cat(void);     // Exibe conteúdo de arquivo
+
+// Funções auxiliares para captura de dados
+void generate_unique_filename(void);         // Gera nome único log_NNN.csv
+void capture_data_and_save(void);           // Captura dados IMU e grava em CSV
+void read_file(const char *filename);        // Lê e imprime conteúdo de arquivo
+
+static void run_help(void);  // Imprime menu de comandos disponíveis
+static void process_stdio(int cRxedChar); // Analisa e executa comandos seriais
+static void mpu6050_reset(void); // Reseta sensor MPU6050
+static void mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp); // Lê dados brutos do IMU
+
 
 typedef void (*p_fn_t)();
 typedef struct{

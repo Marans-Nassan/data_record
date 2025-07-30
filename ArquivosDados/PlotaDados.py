@@ -42,5 +42,5 @@ def main(csv_path):
     plt.show()
 
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else "data1.csv"
+    path = sys.argv[1] if len(sys.argv) > 1 else "log_010.csv" #Alterar aqui o nome do log para ver gráficos.
     main(path)
