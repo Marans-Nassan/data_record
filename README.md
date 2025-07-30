@@ -12,6 +12,8 @@ Implementar interface de linha de comando via UART para operações em cartão S
 
 * **Inicialização**: configura I2C (sensor e display), PWM (buzzer), GPIO (botões e LEDs), RTC e display OLED em segunda core.
 * **Comandos UART** (teclas '1' a '8'):
+* **Gráficos**
+Dentro da pasta ArquivoDados há um código em python que permite visualizar os arquivos em gráficos. Basta só dar o comando python plotadados.py e ele ativa. Se quiser definir qual arquivo apresentar o gráfico, é necessário alterar o nome no código,  na linha 45.
 
   1. **Montar SD**: `mount` monta o cartão.
   2. **Desmontar SD**: `unmount` desmonta o cartão.
